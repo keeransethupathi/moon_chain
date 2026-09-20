@@ -59,7 +59,20 @@ class FyersService:
             pass
 
     def load_saved_token(self):
-        """Load stored access token from disk if exists"""
+        """Load stored access token from disk, env, or st.secrets"""
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets") and "FYERS_ACCESS_TOKEN" in st.secrets:
+                token = str(st.secrets["FYERS_ACCESS_TOKEN"]).strip()
+                if token:
+                    return token
+        except Exception:
+            pass
+
+        env_token = os.environ.get("FYERS_ACCESS_TOKEN", "").strip()
+        if env_token:
+            return env_token
+
         if os.path.exists(TOKEN_FILE):
             try:
                 with open(TOKEN_FILE, "r") as f:

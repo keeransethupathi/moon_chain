@@ -1,14 +1,13 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
-import plotly.graph_objects as go
 from datetime import datetime
-from fyers_service import FyersService, INDEX_SYMBOLS, DEFAULT_APP_ID, DEFAULT_SECRET_ID, DEFAULT_CUSTOMER_ID
-from candle_service import CandleManager
+from fyers_service import INDEX_SYMBOLS, DEFAULT_APP_ID, DEFAULT_SECRET_ID, DEFAULT_CUSTOMER_ID, DEFAULT_REDIRECT_URI
+from data_hub import get_data_hub
 
 # Page configuration
 st.set_page_config(
-    page_title="Fyers Option Chain Terminal",
+    page_title="Moon Chain - Universal Fyers Terminal",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -62,7 +61,7 @@ render_html("""
         align-items: center;
         gap: 10px;
         font-weight: 700;
-        font-size: 1.2rem;
+        font-size: 1.15rem;
         color: #38bdf8;
         letter-spacing: 0.5px;
     }
@@ -96,10 +95,6 @@ render_html("""
         color: #f3f4f6;
     }
 
-    .pcr-bullish { color: #10b981; }
-    .pcr-neutral { color: #38bdf8; }
-    .pcr-bearish { color: #ef4444; }
-
     .stream-badge {
         display: inline-flex;
         align-items: center;
@@ -107,7 +102,7 @@ render_html("""
         font-size: 0.75rem;
         color: #10b981;
         background: rgba(16, 185, 129, 0.12);
-        padding: 4px 10px;
+        padding: 3px 10px;
         border-radius: 12px;
         font-weight: 600;
         border: 1px solid rgba(16, 185, 129, 0.3);
@@ -128,14 +123,6 @@ render_html("""
         100% { opacity: 0.4; }
     }
 
-    .strike-control-bar {
-        background: #131b29;
-        border: 1px solid #1f2d42;
-        border-radius: 8px;
-        padding: 10px 14px;
-        margin-bottom: 12px;
-    }
-
     .auth-card {
         background: #131b2a;
         border: 1px solid #20314a;
@@ -146,15 +133,8 @@ render_html("""
 </style>
 """)
 
-# Initialize Services in session state
-if "fyers_service" not in st.session_state:
-    st.session_state.fyers_service = FyersService()
-
-if "candle_manager" not in st.session_state:
-    st.session_state.candle_manager = CandleManager()
-
-service = st.session_state.fyers_service
-candle_mgr = st.session_state.candle_manager
+# Initialize Singleton Global Market Data Hub (Shared across all users)
+hub = get_data_hub()
 
 # Sidebar Configuration
 with st.sidebar:
@@ -185,41 +165,46 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown("### 🔑 Fyers API Credentials")
+    st.markdown("### 🌐 Universal Multi-User Status")
     
+    is_live = hub.is_connected()
     render_html(f"""
     <div style="background: #151d2c; border: 1px solid #23324a; border-radius: 8px; padding: 10px;">
-        <div style="font-size: 0.75rem; color: #8899ac;">APP ID: <b style="color:#e2e8f0;">{DEFAULT_APP_ID}</b></div>
-        <div style="font-size: 0.75rem; color: #8899ac; margin-top: 3px;">CUSTOMER ID: <b style="color:#e2e8f0;">{DEFAULT_CUSTOMER_ID}</b></div>
-        <div style="font-size: 0.75rem; color: #8899ac; margin-top: 3px;">STATUS: 
-            <b style="color:{'#10b981' if service.access_token else '#ef4444'};">
-                {'✅ TOKEN ACTIVE' if service.access_token else '❌ NO TOKEN'}
-            </b>
+        <div style="font-size: 0.72rem; color: #8899ac; text-transform: uppercase;">Central Data Feed</div>
+        <div style="font-size: 0.82rem; font-weight: 700; color: {'#10b981' if is_live else '#ef4444'}; margin-top: 3px;">
+            {'🟢 LIVE • MULTI-USER SYNCHRONIZED' if is_live else '🔴 OFFLINE • MASTER TOKEN NEEDED'}
+        </div>
+        <div style="font-size: 0.7rem; color: #64748b; margin-top: 5px;">
+            1 Fyers API call / 5s • Zero rate limit bans
+        </div>
+        <div style="font-size: 0.7rem; color: #64748b; margin-top: 2px;">
+            Requests Served: <b style="color: #94a3b8;">{hub.total_requests_served}</b>
         </div>
     </div>
     """)
     
-    with st.expander("🔐 Token & OAuth Settings", expanded=not bool(service.access_token)):
+    with st.expander("⚙️ Admin & Master Token Settings", expanded=not is_live):
+        st.caption("Manage centralized Fyers connection for all users:")
         tab1, tab2 = st.tabs(["Direct Token", "OAuth Login"])
         
         with tab1:
-            token_input = st.text_input("Paste Access Token", value=service.access_token, type="password")
-            if st.button("Save Token", use_container_width=True):
+            token_input = st.text_input("Master Access Token", value=hub.get_token(), type="password")
+            if st.button("Save Master Token", use_container_width=True):
                 if token_input.strip():
-                    service.save_token(token_input.strip())
-                    st.success("Access token saved!")
+                    hub.set_master_token(token_input.strip())
+                    st.success("Master token updated for all users!")
                     st.rerun()
                 else:
                     st.warning("Please enter a valid token.")
                     
         with tab2:
             st.caption("Registered Redirect URL:")
-            sidebar_redirect = st.text_input("Redirect URL", value=service.redirect_uri, key="sb_redirect")
-            if sidebar_redirect != service.redirect_uri:
-                service.save_redirect_uri(sidebar_redirect)
+            redirect_val = st.text_input("Redirect URL", value=hub.fyers_service.redirect_uri, key="sb_redirect")
+            if redirect_val != hub.fyers_service.redirect_uri:
+                hub.fyers_service.save_redirect_uri(redirect_val)
                 st.rerun()
                 
-            sb_login_url = service.get_login_url()
+            sb_login_url = hub.fyers_service.get_login_url()
             render_html(f"""
             <a href="{sb_login_url}" target="_blank" style="
                 display: block;
@@ -237,60 +222,60 @@ with st.sidebar:
             """)
             
             auth_code = st.text_input("2. Auth Code from URL", placeholder="auth_code parameter", key="sb_auth_code")
-            if st.button("Generate Token", use_container_width=True, key="sb_gen_btn"):
+            if st.button("Generate Master Token", use_container_width=True, key="sb_gen_btn"):
                 if auth_code.strip():
-                    success, token, msg = service.exchange_auth_code(auth_code)
+                    success, token, msg = hub.exchange_master_auth_code(auth_code)
                     if success:
-                        st.success("Token generated successfully!")
+                        st.success("Master token generated! All users connected.")
                         st.rerun()
                     else:
                         st.error(f"Error: {msg}")
                         
-        if service.access_token:
-            if st.button("Disconnect Token", use_container_width=True):
-                service.save_token("")
+        if is_live:
+            if st.button("Disconnect Master Token", use_container_width=True):
+                hub.set_master_token("")
                 st.rerun()
 
     st.markdown("---")
-    st.caption("Pure Fyers API v3 • Real-Time Stream")
+    st.caption("Moon Chain Universal • Fyers API v3")
 
 
-# Fragment that auto-refreshes every 5 seconds
+# Fragment that auto-refreshes every 5 seconds without full page reload
 @st.fragment(run_every=f"{refresh_interval}s" if refresh_enabled else None)
 def render_live_option_chain(symbol_name, num_strikes):
-    # Check if access token is present
-    if not service.access_token:
+    # If master token is not active, prompt Admin / Master setup
+    if not hub.is_connected():
         render_html("""
         <div class="terminal-header">
             <div class="brand-title">
-                <span>⚡ FYERS OPTION CHAIN</span>
+                <span>⚡ MOON CHAIN TERMINAL</span>
                 <span style="color: #64748b; font-weight: normal; font-size: 0.9rem;">|</span>
-                <span style="color: #f8fafc; font-size: 1.05rem;">Authentication Required</span>
+                <span style="color: #f8fafc; font-size: 1.05rem;">Waiting for Market Data Provider</span>
             </div>
             <div style="font-size: 0.8rem; color: #ef4444; font-weight: 600;">
-                ● OFFLINE (NO TOKEN)
+                ● FEED OFFLINE
             </div>
         </div>
         """)
 
         render_html("""
         <div class="auth-card">
-            <h3 style="color: #38bdf8; margin-top: 0; margin-bottom: 6px;">🔑 Connect Fyers Live API</h3>
+            <h3 style="color: #38bdf8; margin-top: 0; margin-bottom: 6px;">🔑 Universal Data Feed Setup</h3>
             <p style="color: #94a3b8; font-size: 0.88rem; margin-top: 0;">
-                Provide today's Fyers access token or generate it via OAuth with your App credentials.
+                Provide today's Fyers access token once. The server will stream live synchronized market data to <b>all connected visitors</b>.
             </p>
         </div>
         """)
         
         col1, col2 = st.columns(2)
         with col1:
-            st.subheader("Option 1: Paste Existing Token")
-            st.caption("If you generated an access token today via Postman, Python, or Web:")
-            direct_token = st.text_area("Today's Fyers Access Token", placeholder="Paste access_token here...", height=120)
-            if st.button("Save & Connect Live", type="primary", use_container_width=True):
+            st.subheader("Option 1: Paste Master Token")
+            st.caption("Paste today's active Fyers access token:")
+            direct_token = st.text_area("Fyers Access Token", placeholder="Paste access_token here...", height=120)
+            if st.button("Connect Stream for All Users", type="primary", use_container_width=True):
                 if direct_token.strip():
-                    service.save_token(direct_token.strip())
-                    st.success("Access Token connected! Refreshing...")
+                    hub.set_master_token(direct_token.strip())
+                    st.success("Master Token connected! All users can now view live data.")
                     st.rerun()
                 else:
                     st.error("Please enter a non-empty access token.")
@@ -301,14 +286,14 @@ def render_live_option_chain(symbol_name, num_strikes):
             
             redirect_input = st.text_input(
                 "Registered Redirect URL in Fyers Dashboard",
-                value=service.redirect_uri,
-                help="This matches what you set in https://myapi.fyers.in/dashboard/"
+                value=hub.fyers_service.redirect_uri,
+                help="Matches your registered redirect URL in https://myapi.fyers.in/dashboard/"
             )
-            if redirect_input != service.redirect_uri:
-                service.save_redirect_uri(redirect_input)
+            if redirect_input != hub.fyers_service.redirect_uri:
+                hub.fyers_service.save_redirect_uri(redirect_input)
                 st.rerun()
             
-            login_url = service.get_login_url(redirect_uri=redirect_input)
+            login_url = hub.fyers_service.get_login_url(redirect_uri=redirect_input)
             
             render_html(f"""
             <a href="{login_url}" target="_blank" style="
@@ -326,13 +311,13 @@ def render_live_option_chain(symbol_name, num_strikes):
             ">1. Open Fyers Login Page ↗</a>
             """)
             
-            st.caption("ℹ️ Copy the **authorization code** (or full redirected URL) from the `API - Sample Redirect URI` tab and paste below:")
+            st.caption("ℹ️ Copy the authorization code from the redirected page and paste below:")
             auth_code_input = st.text_input("2. Paste auth_code or Full Redirected URL", placeholder="Paste authorization code or full URL")
-            if st.button("Generate & Connect", type="primary", use_container_width=True):
+            if st.button("Generate Master Token & Connect", type="primary", use_container_width=True):
                 if auth_code_input.strip():
-                    success, token, msg = service.exchange_auth_code(auth_code_input.strip(), redirect_uri=redirect_input)
+                    success, token, msg = hub.exchange_master_auth_code(auth_code_input.strip(), redirect_uri=redirect_input)
                     if success:
-                        st.success("Connected successfully!")
+                        st.success("Connected successfully! All users will receive the live feed.")
                         st.rerun()
                     else:
                         st.error(f"Failed: {msg}")
@@ -340,63 +325,41 @@ def render_live_option_chain(symbol_name, num_strikes):
                     st.warning("Please paste the auth_code or redirect URL.")
         return
 
-    # Call LIVE Fyers API
-    chain_data, err_msg = service.fetch_live_option_chain(symbol_name, num_strikes)
+    # Fetch synchronized shared data (served from cache if within 4s, otherwise 1 Fyers API call)
+    df, spot, atm, raw_result, err_msg = hub.fetch_shared_option_chain(symbol_name, num_strikes)
     
-    if chain_data is None:
+    if df is None:
         render_html(f"""
         <div class="terminal-header">
             <div class="brand-title">
-                <span>⚡ FYERS OPTION CHAIN</span>
+                <span>⚡ MOON CHAIN TERMINAL</span>
                 <span style="color: #64748b; font-weight: normal; font-size: 0.9rem;">|</span>
                 <span style="color: #f8fafc; font-size: 1.05rem;">{symbol_name}</span>
             </div>
             <div style="font-size: 0.8rem; color: #ef4444; font-weight: 600;">
-                ● API NOTICE / ERROR
+                ● API NOTICE
             </div>
         </div>
         """)
-        
-        st.error(f"Fyers API Response: {err_msg}")
-        st.info("If your session token has expired, please update or re-generate your token in the sidebar.")
+        st.error(f"Fyers API Notice: {err_msg}")
+        st.info("If the master session token expired, update it in the Admin sidebar.")
         return
 
-    df = chain_data["df"]
-    spot = chain_data["spot"]
-    atm = chain_data["atm_strike"]
-    pcr = chain_data["pcr"]
-    max_pain = chain_data["max_pain"]
-    total_ce_oi = chain_data["total_ce_oi"]
-    total_pe_oi = chain_data["total_pe_oi"]
-    curr_time = chain_data["timestamp"]
-
-    # PCR Sentiment
-    if pcr > 1.2:
-        pcr_class = "pcr-bullish"
-        pcr_text = f"{pcr} (Bullish)"
-    elif pcr < 0.8:
-        pcr_class = "pcr-bearish"
-        pcr_text = f"{pcr} (Bearish)"
-    else:
-        pcr_class = "pcr-neutral"
-        pcr_text = f"{pcr} (Neutral)"
-
-    # Top Navbar Header
+    # Top Navbar Header with Universal Live Stream Badge
+    curr_time_str = datetime.now().strftime("%H:%M:%S")
     render_html(f"""
     <div class="terminal-header">
         <div class="brand-title">
-            <span>⚡ FYERS LIVE OPTION CHAIN</span>
+            <span>⚡ MOON CHAIN TERMINAL</span>
             <span style="color: #64748b; font-weight: normal; font-size: 0.9rem;">|</span>
             <span style="color: #f8fafc; font-size: 1.05rem;">{symbol_name}</span>
-        </div>
-        <div style="display: flex; align-items: center; gap: 14px;">
-            <div class="stream-badge">
+            <span class="stream-badge">
                 <span class="pulse-dot"></span>
-                <span>LIVE FYERS API • {refresh_interval}s STREAM</span>
-            </div>
-            <div style="font-size: 0.8rem; color: #94a3b8; font-family: monospace;">
-                Last Tick: {curr_time}
-            </div>
+                UNIVERSAL LIVE STREAM (ONE DATA FEED)
+            </span>
+        </div>
+        <div style="font-size: 0.78rem; color: #8899ac;">
+            Shared Feed • {curr_time_str}
         </div>
     </div>
     """)
@@ -415,7 +378,7 @@ def render_live_option_chain(symbol_name, num_strikes):
     </div>
     """)
 
-    # Interactive Strike Selector for Candlestick Chart
+    # Interactive Strike Selector for Candlestick Chart (Individual for this user session)
     available_strikes = [int(s) for s in df["strike"].tolist()] if not df.empty else [25000]
     default_strike = atm if atm in available_strikes else available_strikes[len(available_strikes)//2]
 
@@ -425,7 +388,7 @@ def render_live_option_chain(symbol_name, num_strikes):
             "🎯 Select Strike Price to Load Candlestick Chart:",
             options=available_strikes,
             index=available_strikes.index(default_strike) if default_strike in available_strikes else 0,
-            key="chart_strike_selector"
+            key=f"chart_strike_{symbol_name}"
         )
     with col_s2:
         selected_opt_type = st.radio(
@@ -433,7 +396,7 @@ def render_live_option_chain(symbol_name, num_strikes):
             options=["CE", "PE"],
             horizontal=True,
             format_func=lambda x: "🔵 Call (CE)" if x == "CE" else "🔴 Put (PE)",
-            key="chart_opt_type"
+            key=f"chart_opt_type_{symbol_name}"
         )
     with col_s3:
         contract_row = df[df["strike"] == selected_strike]
@@ -446,10 +409,9 @@ def render_live_option_chain(symbol_name, num_strikes):
                 value=f"₹{c_ltp:,.2f}",
                 delta=f"{c_chg:+.2f}%"
             )
-            # Add live 5-second tick to candle manager
-            candle_mgr.add_tick(symbol_name, selected_strike, selected_opt_type, c_ltp, volume_delta=c_vol)
         else:
             c_ltp = 100.0
+            c_vol = 0
 
     # Tabs: Option Chain Matrix | 5s Candlestick Chart
     tab_table, tab_candlestick = st.tabs([
@@ -483,7 +445,7 @@ def render_live_option_chain(symbol_name, num_strikes):
                 ce_oichg_prefix = "+" if row["ce_oichg"] > 0 else ""
                 pe_oichg_prefix = "+" if row["pe_oichg"] > 0 else ""
 
-                strike_badge = " ⚡ ATM" if is_atm else (" 🎯" if is_selected else "")
+                strike_badge = " ⚡" if is_atm else (" 🎯" if is_selected else "")
 
                 html_rows.append(f"""
                 <tr class="{row_class}">
@@ -496,7 +458,7 @@ def render_live_option_chain(symbol_name, num_strikes):
                     <td class="{ce_cell_class} {ce_chg_cls}">{row['ce_chg']:+.2f}%</td>
                     
                     <!-- STRIKE -->
-                    <td class="{strike_class}" style="font-size: 0.88rem; cursor: pointer;">
+                    <td class="{strike_class}">
                         <b>{strike:,}</b>{strike_badge}
                     </td>
                     
@@ -636,18 +598,18 @@ def render_live_option_chain(symbol_name, num_strikes):
             </html>
             """
             components.html(complete_table_html, height=540, scrolling=True)
-            st.caption("🟡 ITM (In-The-Money) highlighted with amber tint • ⚡ ATM highlighted in gold • 🎯 Selected strike highlighted in blue")
+            st.caption("🟡 ITM highlighted with amber tint • ⚡ ATM highlighted in gold • 🎯 Selected strike highlighted in blue")
 
             # Inline TradingView Lightweight Chart below table
             st.markdown(f"#### 📈 TradingView 5s Candlestick Chart (200 EMA) • {symbol_name} {selected_strike} {selected_opt_type}")
-            inline_tv_html = candle_mgr.generate_lightweight_chart_html(symbol_name, selected_strike, selected_opt_type, height=440)
+            inline_tv_html = hub.candle_manager.generate_lightweight_chart_html(symbol_name, selected_strike, selected_opt_type, height=440)
             components.html(inline_tv_html, height=460, scrolling=False)
 
     with tab_candlestick:
         # Fullscreen dedicated TradingView Lightweight Chart tab with 200 EMA
         col_c1, col_c2 = st.columns([4, 1])
         with col_c1:
-            full_tv_html = candle_mgr.generate_lightweight_chart_html(
+            full_tv_html = hub.candle_manager.generate_lightweight_chart_html(
                 symbol_name, selected_strike, selected_opt_type, height=520,
                 title_suffix=f"• Spot: ₹{spot:,.2f}"
             )
@@ -662,7 +624,7 @@ def render_live_option_chain(symbol_name, num_strikes):
                 c_oichg = int(contract_row["ce_oichg"].values[0] if selected_opt_type == "CE" else contract_row["pe_oichg"].values[0])
                 c_vol = int(contract_row["ce_vol"].values[0] if selected_opt_type == "CE" else contract_row["pe_vol"].values[0])
                 c_iv = float(contract_row["ce_iv"].values[0] if selected_opt_type == "CE" else contract_row["pe_iv"].values[0])
-                _, _, latest_ema = candle_mgr.get_chart_series(symbol_name, selected_strike, selected_opt_type)
+                _, _, latest_ema = hub.candle_manager.get_chart_series(symbol_name, selected_strike, selected_opt_type)
                 
                 render_html(f"""
                 <div style="background: #151d2c; border: 1px solid #23324a; border-radius: 8px; padding: 12px; font-size: 0.85rem;">
@@ -677,7 +639,6 @@ def render_live_option_chain(symbol_name, num_strikes):
                     <div><b>Volume:</b> {c_vol:,}</div>
                 </div>
                 """)
-
 
 
 # Run the live fragment
