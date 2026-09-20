@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Fyers credentials & session tokens
+fyers_token.txt
+fyers_config.json
+.env
+
+# Logs
+*.log
+fyersApi.log
+fyersRequests.log
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
