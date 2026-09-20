@@ -1,6 +1,7 @@
 import threading
 import time
 from datetime import datetime
+import pandas as pd
 import streamlit as st
 from fyers_service import FyersService, INDEX_SYMBOLS, DEFAULT_APP_ID, DEFAULT_SECRET_ID, DEFAULT_CUSTOMER_ID, DEFAULT_REDIRECT_URI
 from candle_service import CandleManager
@@ -60,6 +61,11 @@ class GlobalMarketDataHub:
                 self._data_cache.clear()
             return success, token, msg
 
+    def clear_cache(self):
+        """Clear cached option chain data"""
+        with self._lock:
+            self._data_cache.clear()
+
     def fetch_shared_option_chain(self, symbol_key, strike_count=20, expiry_timestamp=""):
         """Fetch option chain with centralized caching.
         
@@ -72,9 +78,19 @@ class GlobalMarketDataHub:
 
         # Check in-memory cache first
         if cache_key in self._data_cache:
-            entry = self._data_cache[cache_key]
-            if (now - entry["time"]) < self.cache_ttl:
-                return entry["df"], entry["spot"], entry["atm"], entry["raw"], entry["error"]
+            try:
+                entry = self._data_cache[cache_key]
+                cache_time = entry.get("time", 0.0)
+                if (now - cache_time) < self.cache_ttl and entry.get("df") is not None:
+                    return (
+                        entry.get("df"),
+                        entry.get("spot", 0.0),
+                        entry.get("atm", 0),
+                        entry.get("raw"),
+                        entry.get("error", "")
+                    )
+            except Exception:
+                pass
 
         # Cache miss or expired - acquire lock to make at most 1 Fyers call
         with self._lock:
@@ -82,8 +98,15 @@ class GlobalMarketDataHub:
                 # Double-check if another thread updated cache while waiting for lock
                 if cache_key in self._data_cache:
                     entry = self._data_cache[cache_key]
-                    if (time.time() - entry["time"]) < self.cache_ttl:
-                        return entry["df"], entry["spot"], entry["atm"], entry["raw"], entry["error"]
+                    cache_time = entry.get("time", 0.0)
+                    if (time.time() - cache_time) < self.cache_ttl and entry.get("df") is not None:
+                        return (
+                            entry.get("df"),
+                            entry.get("spot", 0.0),
+                            entry.get("atm", 0),
+                            entry.get("raw"),
+                            entry.get("error", "")
+                        )
 
                 self.total_fyers_calls += 1
                 self.last_fetch_time = time.time()
@@ -137,16 +160,31 @@ class GlobalMarketDataHub:
                     }
                     return df, spot, atm, result, ""
                 else:
-                    if cache_key in self._data_cache and not self._data_cache[cache_key]["df"].empty:
+                    if cache_key in self._data_cache:
                         entry = self._data_cache[cache_key]
-                        return entry["df"], entry["spot"], entry["atm"], entry["raw"], f"⚠️ Using cached data ({error_msg})"
+                        if entry.get("df") is not None and not entry.get("df").empty:
+                            return (
+                                entry.get("df"),
+                                entry.get("spot", 0.0),
+                                entry.get("atm", 0),
+                                entry.get("raw"),
+                                f"⚠️ Using cached data ({error_msg})"
+                            )
                     
                     return None, 0.0, 0, None, error_msg or "Failed to fetch option chain"
             except Exception as ex:
-                if cache_key in self._data_cache and not self._data_cache[cache_key]["df"].empty:
+                if cache_key in self._data_cache:
                     entry = self._data_cache[cache_key]
-                    return entry["df"], entry["spot"], entry["atm"], entry["raw"], f"⚠️ Using cached data ({str(ex)})"
+                    if entry.get("df") is not None and not entry.get("df").empty:
+                        return (
+                            entry.get("df"),
+                            entry.get("spot", 0.0),
+                            entry.get("atm", 0),
+                            entry.get("raw"),
+                            f"⚠️ Using cached data ({str(ex)})"
+                        )
                 return None, 0.0, 0, None, f"Processing Error: {str(ex)}"
+
 
 
 
