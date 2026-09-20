@@ -6,6 +6,7 @@ A high-performance, real-time Indian Markets Option Chain and Candlestick Tradin
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.35%2B-FF4B4B.svg)
 ![Fyers API](https://img.shields.io/badge/Fyers%20API-v3-0284c7.svg)
 ![TradingView](https://img.shields.io/badge/TradingView-Lightweight%20Charts-2962ff.svg)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/deploy?repository=keeransethupathi/moon_chain&branch=main&mainModule=app.py)
 
 ---
 
