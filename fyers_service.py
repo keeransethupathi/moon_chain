@@ -236,6 +236,7 @@ class FyersService:
             return {
                 "df": df,
                 "spot": spot_price or 0.0,
+                "atm": 0,
                 "atm_strike": 0,
                 "pcr": 1.0,
                 "max_pain": 0,
@@ -277,6 +278,7 @@ class FyersService:
         return {
             "df": df,
             "spot": spot_price,
+            "atm": atm_strike,
             "atm_strike": atm_strike,
             "pcr": pcr,
             "max_pain": max_pain_strike,

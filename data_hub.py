@@ -94,9 +94,9 @@ class GlobalMarketDataHub:
             )
 
             if result is not None and not error_msg:
-                df = result["df"]
-                spot = result["spot"]
-                atm = result["atm"]
+                df = result.get("df")
+                spot = float(result.get("spot", 0.0))
+                atm = int(result.get("atm_strike", result.get("atm", 0)))
 
                 # Ingest live ticks for all strikes in the chain into global candle manager
                 if not df.empty:
