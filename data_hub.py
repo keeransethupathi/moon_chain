@@ -78,55 +78,76 @@ class GlobalMarketDataHub:
 
         # Cache miss or expired - acquire lock to make at most 1 Fyers call
         with self._lock:
-            # Double-check if another thread updated cache while waiting for lock
-            if cache_key in self._data_cache:
-                entry = self._data_cache[cache_key]
-                if (time.time() - entry["time"]) < self.cache_ttl:
-                    return entry["df"], entry["spot"], entry["atm"], entry["raw"], entry["error"]
+            try:
+                # Double-check if another thread updated cache while waiting for lock
+                if cache_key in self._data_cache:
+                    entry = self._data_cache[cache_key]
+                    if (time.time() - entry["time"]) < self.cache_ttl:
+                        return entry["df"], entry["spot"], entry["atm"], entry["raw"], entry["error"]
 
-            self.total_fyers_calls += 1
-            self.last_fetch_time = time.time()
+                self.total_fyers_calls += 1
+                self.last_fetch_time = time.time()
 
-            result, error_msg = self.fyers_service.fetch_live_option_chain(
-                symbol_key, 
-                strike_count=strike_count, 
-                expiry_timestamp=expiry_timestamp
-            )
+                result, error_msg = self.fyers_service.fetch_live_option_chain(
+                    symbol_key, 
+                    strike_count=strike_count, 
+                    expiry_timestamp=expiry_timestamp
+                )
 
-            if result is not None and not error_msg:
-                df = result.get("df")
-                spot = float(result.get("spot", 0.0))
-                atm = int(result.get("atm_strike", result.get("atm", 0)))
+                if result is not None and not error_msg and isinstance(result, dict):
+                    df = result.get("df", pd.DataFrame())
+                    spot = float(result.get("spot", 0.0) or 0.0)
+                    
+                    # Safe extraction of atm strike
+                    atm_val = result.get("atm") if result.get("atm") is not None else result.get("atm_strike")
+                    if atm_val is not None:
+                        try:
+                            atm = int(float(atm_val))
+                        except Exception:
+                            atm = 0
+                    elif df is not None and not df.empty and "strike" in df:
+                        atm = int(df["strike"].iloc[len(df)//2])
+                    else:
+                        atm = 0
 
-                # Ingest live ticks for all strikes in the chain into global candle manager
-                if not df.empty:
-                    for _, row in df.iterrows():
-                        strike = int(row["strike"])
-                        if row["ce_ltp"] > 0:
-                            self.candle_manager.add_tick(
-                                symbol_key, strike, "CE", row["ce_ltp"], volume_delta=int(row["ce_vol"])
-                            )
-                        if row["pe_ltp"] > 0:
-                            self.candle_manager.add_tick(
-                                symbol_key, strike, "PE", row["pe_ltp"], volume_delta=int(row["pe_vol"])
-                            )
+                    # Ingest live ticks for all valid strikes in the chain into global candle manager
+                    if df is not None and not df.empty:
+                        for _, row in df.iterrows():
+                            try:
+                                strike = int(row.get("strike", 0))
+                                ce_ltp = float(row.get("ce_ltp", 0.0))
+                                pe_ltp = float(row.get("pe_ltp", 0.0))
+                                ce_vol = int(row.get("ce_vol", 0))
+                                pe_vol = int(row.get("pe_vol", 0))
+                                if strike > 0:
+                                    if ce_ltp > 0:
+                                        self.candle_manager.add_tick(symbol_key, strike, "CE", ce_ltp, volume_delta=ce_vol)
+                                    if pe_ltp > 0:
+                                        self.candle_manager.add_tick(symbol_key, strike, "PE", pe_ltp, volume_delta=pe_vol)
+                            except Exception:
+                                pass
 
-                self._data_cache[cache_key] = {
-                    "df": df,
-                    "spot": spot,
-                    "atm": atm,
-                    "raw": result,
-                    "time": time.time(),
-                    "error": ""
-                }
-                return df, spot, atm, result, ""
-            else:
-                # If fetch failed but we have a previous cache entry, return it with error note
+                    self._data_cache[cache_key] = {
+                        "df": df,
+                        "spot": spot,
+                        "atm": atm,
+                        "raw": result,
+                        "time": time.time(),
+                        "error": ""
+                    }
+                    return df, spot, atm, result, ""
+                else:
+                    if cache_key in self._data_cache and not self._data_cache[cache_key]["df"].empty:
+                        entry = self._data_cache[cache_key]
+                        return entry["df"], entry["spot"], entry["atm"], entry["raw"], f"⚠️ Using cached data ({error_msg})"
+                    
+                    return None, 0.0, 0, None, error_msg or "Failed to fetch option chain"
+            except Exception as ex:
                 if cache_key in self._data_cache and not self._data_cache[cache_key]["df"].empty:
                     entry = self._data_cache[cache_key]
-                    return entry["df"], entry["spot"], entry["atm"], entry["raw"], f"⚠️ Using cached data ({error_msg})"
-                
-                return None, 0.0, 0, None, error_msg
+                    return entry["df"], entry["spot"], entry["atm"], entry["raw"], f"⚠️ Using cached data ({str(ex)})"
+                return None, 0.0, 0, None, f"Processing Error: {str(ex)}"
+
 
 
 @st.cache_resource

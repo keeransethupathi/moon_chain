@@ -326,7 +326,10 @@ def render_live_option_chain(symbol_name, num_strikes):
         return
 
     # Fetch synchronized shared data (served from cache if within 4s, otherwise 1 Fyers API call)
-    df, spot, atm, raw_result, err_msg = hub.fetch_shared_option_chain(symbol_name, num_strikes)
+    try:
+        df, spot, atm, raw_result, err_msg = hub.fetch_shared_option_chain(symbol_name, num_strikes)
+    except Exception as exc:
+        df, spot, atm, raw_result, err_msg = None, 0.0, 0, None, f"Data stream notice: {str(exc)}"
     
     if df is None:
         render_html(f"""
