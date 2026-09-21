@@ -157,7 +157,44 @@ render_html("""
 """)
 
 # Initialize Singleton Global Market Data Hub (Shared across all users)
-hub = get_data_hub()
+hub = get_data_hub("v2.3")
+
+# Auto-heal legacy cached instances on Streamlit Cloud
+if not hasattr(hub, "get_connection_status") or not hasattr(hub, "get_last_spot"):
+    try:
+        st.cache_resource.clear()
+        hub = get_data_hub("v2.3")
+    except Exception:
+        pass
+
+def safe_conn_status(hub_inst):
+    if hasattr(hub_inst, "get_connection_status"):
+        try:
+            return hub_inst.get_connection_status()
+        except Exception:
+            pass
+    if hasattr(hub_inst, "is_connected"):
+        try:
+            return "LIVE" if hub_inst.is_connected() else "NO_TOKEN"
+        except Exception:
+            pass
+    return "NO_TOKEN"
+
+def safe_token_details(hub_inst):
+    if hasattr(hub_inst, "fyers_service") and hasattr(hub_inst.fyers_service, "get_token_details"):
+        try:
+            return hub_inst.fyers_service.get_token_details()
+        except Exception:
+            pass
+    return {"status": "UNKNOWN", "expired": False, "exp_time": None}
+
+def safe_last_spot(hub_inst, sym):
+    if hasattr(hub_inst, "get_last_spot"):
+        try:
+            return hub_inst.get_last_spot(sym)
+        except Exception:
+            pass
+    return 0.0
 
 # Sidebar Configuration
 with st.sidebar:
@@ -190,9 +227,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🌐 Universal Multi-User Status")
     
-    conn_status = hub.get_connection_status()
+    conn_status = safe_conn_status(hub)
     is_live = (conn_status == "LIVE")
-    token_details = hub.fyers_service.get_token_details()
+    token_details = safe_token_details(hub)
     
     status_color = "#10b981" if conn_status == "LIVE" else ("#f59e0b" if conn_status == "EXPIRED" else "#ef4444")
     if conn_status == "LIVE":
@@ -282,7 +319,7 @@ with st.sidebar:
 # Fragment that auto-refreshes every 5 seconds without full page reload
 @st.fragment(run_every=f"{refresh_interval}s" if refresh_enabled else None)
 def render_live_option_chain(symbol_name, num_strikes):
-    conn_status = hub.get_connection_status()
+    conn_status = safe_conn_status(hub)
     is_live = (conn_status == "LIVE")
     curr_time_str = datetime.now().strftime("%H:%M:%S")
     
@@ -295,7 +332,7 @@ def render_live_option_chain(symbol_name, num_strikes):
             df, spot, atm, raw_result, err_msg = None, 0.0, 0, None, f"Data stream notice: {str(exc)}"
 
     # Determine display spot and atm values
-    last_spot = hub.get_last_spot(symbol_name)
+    last_spot = safe_last_spot(hub, symbol_name)
     display_spot = spot if spot > 0 else last_spot
     strike_gap = INDEX_SYMBOLS.get(symbol_name, {}).get("strike_gap", 50)
     if atm > 0:
@@ -360,7 +397,7 @@ def render_live_option_chain(symbol_name, num_strikes):
 
     # If master token is not active or expired, render Setup & Renewal Card
     if not is_live:
-        token_details = hub.fyers_service.get_token_details()
+        token_details = safe_token_details(hub)
         expired_msg = f"Your session token expired at <b>{token_details.get('exp_time')}</b>. Please renew it below to resume live streaming." if conn_status == "EXPIRED" else "Provide today's Fyers access token once. The server will stream live synchronized market data to <b>all connected visitors</b>."
 
         render_html(f"""

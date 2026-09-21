@@ -217,7 +217,25 @@ class GlobalMarketDataHub:
 
 
 
-@st.cache_resource
-def get_data_hub():
+def ensure_instance_compatibility(hub):
+    """Ensure cached instances on Streamlit Cloud from previous runs have all new methods."""
+    if not hasattr(hub, "_last_spot"):
+        hub._last_spot = {}
+    if not hasattr(hub, "last_api_error"):
+        hub.last_api_error = ""
+    if not hasattr(hub, "get_connection_status"):
+        hub.get_connection_status = lambda: (
+            "NO_TOKEN" if not getattr(hub.fyers_service, "access_token", None)
+            else "EXPIRED" if getattr(hub.fyers_service, "is_token_expired", lambda: False)()
+            else "LIVE"
+        )
+    if not hasattr(hub, "get_last_spot"):
+        hub.get_last_spot = lambda sym: hub._last_spot.get(sym, 0.0)
+    return hub
+
+
+@st.cache_resource(show_spinner=False)
+def get_data_hub(_version="v2.3"):
     """Streamlit singleton instance shared across all users and browser sessions."""
-    return GlobalMarketDataHub()
+    instance = GlobalMarketDataHub()
+    return ensure_instance_compatibility(instance)
