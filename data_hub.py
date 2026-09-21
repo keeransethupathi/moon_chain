@@ -25,6 +25,8 @@ class GlobalMarketDataHub:
         self.last_fetch_time = 0.0
         self.total_requests_served = 0
         self.total_fyers_calls = 0
+        self._last_spot = {}
+        self.last_api_error = ""
 
         # Attempt to load token from st.secrets if running on Streamlit Cloud
         self._try_load_secrets_token()
@@ -40,8 +42,24 @@ class GlobalMarketDataHub:
             pass
 
     def is_connected(self):
-        """Check if master Fyers access token is configured"""
-        return bool(self.fyers_service.access_token)
+        """Check if master Fyers access token is configured and NOT expired"""
+        if not self.fyers_service.access_token:
+            return False
+        return not self.fyers_service.is_token_expired()
+
+    def get_connection_status(self):
+        """Return clear connection status: LIVE, EXPIRED, or NO_TOKEN"""
+        if not self.fyers_service.access_token:
+            return "NO_TOKEN"
+        if self.fyers_service.is_token_expired():
+            return "EXPIRED"
+        if self.last_api_error and any(k in self.last_api_error.lower() for k in ["token", "auth", "-15", "invalid"]):
+            return "EXPIRED"
+        return "LIVE"
+
+    def get_last_spot(self, symbol_key):
+        """Return the last known valid spot price for this symbol"""
+        return self._last_spot.get(symbol_key, 0.0)
 
     def get_token(self):
         return self.fyers_service.access_token
@@ -50,6 +68,7 @@ class GlobalMarketDataHub:
         """Update master access token across all sessions"""
         with self._lock:
             self.fyers_service.save_token(token)
+            self.last_api_error = ""
             # Clear cached errors
             self._data_cache.clear()
 
@@ -58,6 +77,7 @@ class GlobalMarketDataHub:
         with self._lock:
             success, token, msg = self.fyers_service.exchange_auth_code(auth_code, redirect_uri)
             if success:
+                self.last_api_error = ""
                 self._data_cache.clear()
             return success, token, msg
 
@@ -120,6 +140,11 @@ class GlobalMarketDataHub:
                 if result is not None and not error_msg and isinstance(result, dict):
                     df = result.get("df", pd.DataFrame())
                     spot = float(result.get("spot", 0.0) or 0.0)
+                    if spot > 0:
+                        self._last_spot[symbol_key] = spot
+                    elif symbol_key in self._last_spot:
+                        spot = self._last_spot[symbol_key]
+                    self.last_api_error = ""
                     
                     # Safe extraction of atm strike
                     atm_val = result.get("atm") if result.get("atm") is not None else result.get("atm_strike")
@@ -160,30 +185,34 @@ class GlobalMarketDataHub:
                     }
                     return df, spot, atm, result, ""
                 else:
+                    self.last_api_error = error_msg or "Failed to fetch option chain"
+                    fallback_spot = self._last_spot.get(symbol_key, 0.0)
                     if cache_key in self._data_cache:
                         entry = self._data_cache[cache_key]
                         if entry.get("df") is not None and not entry.get("df").empty:
                             return (
                                 entry.get("df"),
-                                entry.get("spot", 0.0),
+                                entry.get("spot", fallback_spot) or fallback_spot,
                                 entry.get("atm", 0),
                                 entry.get("raw"),
                                 f"⚠️ Using cached data ({error_msg})"
                             )
                     
-                    return None, 0.0, 0, None, error_msg or "Failed to fetch option chain"
+                    return None, fallback_spot, 0, None, error_msg or "Failed to fetch option chain"
             except Exception as ex:
+                self.last_api_error = str(ex)
+                fallback_spot = self._last_spot.get(symbol_key, 0.0)
                 if cache_key in self._data_cache:
                     entry = self._data_cache[cache_key]
                     if entry.get("df") is not None and not entry.get("df").empty:
                         return (
                             entry.get("df"),
-                            entry.get("spot", 0.0),
+                            entry.get("spot", fallback_spot) or fallback_spot,
                             entry.get("atm", 0),
                             entry.get("raw"),
                             f"⚠️ Using cached data ({str(ex)})"
                         )
-                return None, 0.0, 0, None, f"Processing Error: {str(ex)}"
+                return None, fallback_spot, 0, None, f"Processing Error: {str(ex)}"
 
 
 

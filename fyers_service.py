@@ -2,6 +2,7 @@ import os
 import time
 import math
 import json
+import base64
 from datetime import datetime
 import urllib.parse
 import pandas as pd
@@ -91,6 +92,72 @@ class FyersService:
                 f.write(self.access_token)
         except Exception:
             pass
+
+    def is_token_expired(self):
+        """Check whether the stored access token has expired based on its JWT payload"""
+        if not self.access_token:
+            return True
+        try:
+            parts = self.access_token.split(".")
+            if len(parts) >= 2:
+                # Add base64 padding if needed
+                payload_b64 = parts[1]
+                rem = len(payload_b64) % 4
+                if rem > 0:
+                    payload_b64 += "=" * (4 - rem)
+                payload_json = base64.b64decode(payload_b64.encode("utf-8")).decode("utf-8")
+                payload = json.loads(payload_json)
+                exp = payload.get("exp", 0)
+                if exp > 0 and time.time() >= exp:
+                    return True
+                return False
+        except Exception:
+            pass
+        return False
+
+    def get_token_details(self):
+        """Get expiration timestamp and status of the current token"""
+        if not self.access_token:
+            return {"status": "NO_TOKEN", "expired": True, "exp_time": None}
+        try:
+            parts = self.access_token.split(".")
+            if len(parts) >= 2:
+                payload_b64 = parts[1]
+                rem = len(payload_b64) % 4
+                if rem > 0:
+                    payload_b64 += "=" * (4 - rem)
+                payload_json = base64.b64decode(payload_b64.encode("utf-8")).decode("utf-8")
+                payload = json.loads(payload_json)
+                exp = payload.get("exp", 0)
+                exp_dt = datetime.fromtimestamp(exp) if exp > 0 else None
+                is_expired = time.time() >= exp if exp > 0 else False
+                return {
+                    "status": "EXPIRED" if is_expired else "VALID",
+                    "expired": is_expired,
+                    "exp_time": exp_dt.strftime("%Y-%m-%d %H:%M:%S") if exp_dt else "Unknown",
+                    "remaining_sec": max(0, int(exp - time.time())) if exp > 0 else 0
+                }
+        except Exception:
+            pass
+        return {"status": "UNKNOWN", "expired": False, "exp_time": None}
+
+    def get_spot_quote(self, symbol_key):
+        """Fetch live real-time spot quote directly via Fyers Quotes API"""
+        symbol_info = INDEX_SYMBOLS.get(symbol_key, INDEX_SYMBOLS["NIFTY 50"])
+        fyers_symbol = symbol_info["symbol"]
+        client = self.init_fyers_client()
+        if not client:
+            return 0.0
+        try:
+            res = client.quotes(data={"symbols": fyers_symbol})
+            if res.get("s") == "ok" and "d" in res and len(res["d"]) > 0:
+                quote_data = res["d"][0].get("v", {})
+                lp = quote_data.get("lp")
+                if lp is not None and float(lp) > 0:
+                    return float(lp)
+        except Exception:
+            pass
+        return 0.0
 
     def get_login_url(self, redirect_uri=None):
         """Generate Fyers OAuth login URL for obtaining auth code"""
@@ -195,14 +262,19 @@ class FyersService:
 
     def _parse_fyers_response(self, data, symbol_key):
         """Parse raw Fyers option chain response into tabular structured format"""
+        symbol_info = INDEX_SYMBOLS.get(symbol_key, INDEX_SYMBOLS["NIFTY 50"])
+        fyers_symbol = symbol_info["symbol"]
+        
         raw_chain = data.get("optionsChain", [])
         vix = data.get("indiavixData", {}).get("ltp", 0.0)
         expiries = data.get("expiryData", [])
         
-        spot_price = (
+        # 1. Look for spot price in root-level fields
+        spot_price = float(
             data.get("underlyingValue") or 
             data.get("spot_price") or 
             data.get("underlying_price") or 
+            data.get("netLtp") or 
             0.0
         )
         
@@ -210,22 +282,45 @@ class FyersService:
         for item in raw_chain:
             strike = item.get("strike_price")
             opt_type = item.get("option_type")
+            item_sym = item.get("symbol", "")
+            item_ltp = float(item.get("ltp", 0.0))
+
+            # Detect if this item is the underlying index itself (Fyers returns 1 INDEX record)
+            is_index_item = (
+                item_sym == fyers_symbol or
+                opt_type not in ("CE", "PE") or
+                strike is None or
+                strike in (-1, 0)
+            )
+
+            if is_index_item:
+                if spot_price <= 0.0 and item_ltp > 0:
+                    spot_price = item_ltp
+                # Do not insert index entry as a strike row in option chain
+                continue
+            
+            strike = int(strike)
             if strike not in rows:
                 rows[strike] = {"strike": strike}
             
             prefix = "ce_" if opt_type == "CE" else "pe_"
-            rows[strike][prefix + "ltp"] = float(item.get("ltp", 0.0))
+            rows[strike][prefix + "ltp"] = item_ltp
             rows[strike][prefix + "chg"] = float(item.get("pchange", item.get("change", 0.0)))
             rows[strike][prefix + "oi"] = int(item.get("oi", 0))
             rows[strike][prefix + "oichg"] = int(item.get("oichange", 0))
             rows[strike][prefix + "vol"] = int(item.get("volume", 0))
             rows[strike][prefix + "iv"] = float(item.get("iv", 0.0))
-            rows[strike][prefix + "symbol"] = item.get("symbol", "")
+            rows[strike][prefix + "symbol"] = item_sym
 
         df_list = list(rows.values())
-        df = pd.DataFrame(df_list).sort_values("strike").reset_index(drop=True)
+        df = pd.DataFrame(df_list).sort_values("strike").reset_index(drop=True) if df_list else pd.DataFrame()
         
-        if spot_price == 0.0 and not df.empty and "strike" in df:
+        # 2. If spot_price is still 0, fetch live quote directly from Fyers Quotes API
+        if spot_price <= 0.0:
+            spot_price = self.get_spot_quote(symbol_key)
+
+        # 3. Fallback to median strike only if spot_price is still unavailable
+        if spot_price <= 0.0 and not df.empty and "strike" in df:
             spot_price = float(df["strike"].median())
             
         return self._enrich_option_data(df, spot_price, vix, expiries)

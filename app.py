@@ -22,7 +22,7 @@ def render_html(html_str):
 render_html("""
 <style>
     .block-container {
-        padding-top: 0.6rem;
+        padding-top: 1.0rem;
         padding-bottom: 0.5rem;
         padding-left: 0.8rem;
         padding-right: 0.8rem;
@@ -35,9 +35,32 @@ render_html("""
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     
+    /* Clean Trading Desk: Hide default Streamlit header toolbar/deploy and remove overlay */
     header[data-testid="stHeader"] {
-        background-color: rgba(11, 14, 20, 0.9);
-        backdrop-filter: blur(8px);
+        background: transparent !important;
+        height: 0px !important;
+        min-height: 0px !important;
+        pointer-events: none !important;
+    }
+    
+    header[data-testid="stHeader"] > div {
+        background: transparent !important;
+    }
+
+    [data-testid="stToolbar"], 
+    [data-testid="stDecoration"],
+    .stAppDeployButton {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0px !important;
+        width: 0px !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+    }
+
+    [data-testid="stSidebarCollapsedControl"] {
+        pointer-events: auto !important;
+        z-index: 999999 !important;
     }
     
     [data-testid="stSidebar"] {
@@ -167,13 +190,29 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 🌐 Universal Multi-User Status")
     
-    is_live = hub.is_connected()
+    conn_status = hub.get_connection_status()
+    is_live = (conn_status == "LIVE")
+    token_details = hub.fyers_service.get_token_details()
+    
+    status_color = "#10b981" if conn_status == "LIVE" else ("#f59e0b" if conn_status == "EXPIRED" else "#ef4444")
+    if conn_status == "LIVE":
+        status_text = "🟢 LIVE • MULTI-USER SYNCHRONIZED"
+    elif conn_status == "EXPIRED":
+        status_text = "🟡 EXPIRED • TOKEN RENEWAL REQUIRED"
+    else:
+        status_text = "🔴 OFFLINE • MASTER TOKEN NEEDED"
+
+    exp_note = ""
+    if conn_status == "EXPIRED" and token_details.get("exp_time"):
+        exp_note = f'<div style="font-size: 0.68rem; color: #f59e0b; margin-top: 3px;">Expired: {token_details["exp_time"]}</div>'
+
     render_html(f"""
     <div style="background: #151d2c; border: 1px solid #23324a; border-radius: 8px; padding: 10px;">
         <div style="font-size: 0.72rem; color: #8899ac; text-transform: uppercase;">Central Data Feed</div>
-        <div style="font-size: 0.82rem; font-weight: 700; color: {'#10b981' if is_live else '#ef4444'}; margin-top: 3px;">
-            {'🟢 LIVE • MULTI-USER SYNCHRONIZED' if is_live else '🔴 OFFLINE • MASTER TOKEN NEEDED'}
+        <div style="font-size: 0.82rem; font-weight: 700; color: {status_color}; margin-top: 3px;">
+            {status_text}
         </div>
+        {exp_note}
         <div style="font-size: 0.7rem; color: #64748b; margin-top: 5px;">
             1 Fyers API call / 5s • Zero rate limit bans
         </div>
@@ -243,26 +282,92 @@ with st.sidebar:
 # Fragment that auto-refreshes every 5 seconds without full page reload
 @st.fragment(run_every=f"{refresh_interval}s" if refresh_enabled else None)
 def render_live_option_chain(symbol_name, num_strikes):
-    # If master token is not active, prompt Admin / Master setup
-    if not hub.is_connected():
-        render_html("""
-        <div class="terminal-header">
-            <div class="brand-title">
-                <span>⚡ MOON CHAIN TERMINAL</span>
-                <span style="color: #64748b; font-weight: normal; font-size: 0.9rem;">|</span>
-                <span style="color: #f8fafc; font-size: 1.05rem;">Waiting for Market Data Provider</span>
-            </div>
-            <div style="font-size: 0.8rem; color: #ef4444; font-weight: 600;">
-                ● FEED OFFLINE
-            </div>
-        </div>
-        """)
+    conn_status = hub.get_connection_status()
+    is_live = (conn_status == "LIVE")
+    curr_time_str = datetime.now().strftime("%H:%M:%S")
+    
+    # Try fetching shared option chain if connected
+    df, spot, atm, raw_result, err_msg = None, 0.0, 0, None, ""
+    if is_live:
+        try:
+            df, spot, atm, raw_result, err_msg = hub.fetch_shared_option_chain(symbol_name, num_strikes)
+        except Exception as exc:
+            df, spot, atm, raw_result, err_msg = None, 0.0, 0, None, f"Data stream notice: {str(exc)}"
 
-        render_html("""
+    # Determine display spot and atm values
+    last_spot = hub.get_last_spot(symbol_name)
+    display_spot = spot if spot > 0 else last_spot
+    strike_gap = INDEX_SYMBOLS.get(symbol_name, {}).get("strike_gap", 50)
+    if atm > 0:
+        display_atm = atm
+    elif display_spot > 0:
+        display_atm = int(round(display_spot / strike_gap) * strike_gap)
+    else:
+        display_atm = 0
+
+    # Top Navbar Header with Universal Live Stream Badge (ALWAYS RENDERED)
+    if is_live and df is not None:
+        badge_bg = "rgba(16, 185, 129, 0.12)"
+        badge_color = "#10b981"
+        badge_border = "rgba(16, 185, 129, 0.3)"
+        badge_text = "UNIVERSAL LIVE STREAM (ONE DATA FEED)"
+        time_label = f"Shared Feed • {curr_time_str}"
+    elif conn_status == "EXPIRED":
+        badge_bg = "rgba(245, 158, 11, 0.15)"
+        badge_color = "#f59e0b"
+        badge_border = "rgba(245, 158, 11, 0.3)"
+        badge_text = "TOKEN EXPIRED (RENEWAL REQUIRED)"
+        time_label = "Standby • Token Renewal Required"
+    else:
+        badge_bg = "rgba(239, 68, 68, 0.15)"
+        badge_color = "#ef4444"
+        badge_border = "rgba(239, 68, 68, 0.3)"
+        badge_text = "FEED OFFLINE (SETUP NEEDED)"
+        time_label = "Standby • Waiting for token"
+
+    render_html(f"""
+    <div class="terminal-header" id="moon-terminal-header">
+        <div class="brand-title">
+            <span>⚡ MOON CHAIN TERMINAL</span>
+            <span style="color: #64748b; font-weight: normal; font-size: 0.9rem;">|</span>
+            <span style="color: #f8fafc; font-size: 1.05rem;">{symbol_name}</span>
+            <span class="stream-badge" style="background: {badge_bg}; color: {badge_color}; border: 1px solid {badge_border};">
+                <span class="pulse-dot" style="background-color: {badge_color}; box-shadow: 0 0 8px {badge_color};"></span>
+                {badge_text}
+            </span>
+        </div>
+        <div style="font-size: 0.78rem; color: #8899ac;">
+            {time_label}
+        </div>
+    </div>
+    """)
+
+    # Key Analytics Metrics Cards (Spot Price & ATM Strike only) - ALWAYS RENDERED
+    spot_text = f"₹{display_spot:,.2f}" if display_spot > 0 else "Waiting for Feed..."
+    atm_text = f"{display_atm:,}" if display_atm > 0 else "--"
+    render_html(f"""
+    <div class="metric-container" id="moon-spot-container">
+        <div class="metric-card" id="moon-spot-card">
+            <div class="metric-label">Spot Price</div>
+            <div class="metric-value" id="nifty-spot-price" style="color: #38bdf8;">{spot_text}</div>
+        </div>
+        <div class="metric-card" id="moon-atm-card">
+            <div class="metric-label">ATM Strike</div>
+            <div class="metric-value" id="nifty-atm-strike" style="color: #fbbf24;">{atm_text}</div>
+        </div>
+    </div>
+    """)
+
+    # If master token is not active or expired, render Setup & Renewal Card
+    if not is_live:
+        token_details = hub.fyers_service.get_token_details()
+        expired_msg = f"Your session token expired at <b>{token_details.get('exp_time')}</b>. Please renew it below to resume live streaming." if conn_status == "EXPIRED" else "Provide today's Fyers access token once. The server will stream live synchronized market data to <b>all connected visitors</b>."
+
+        render_html(f"""
         <div class="auth-card">
-            <h3 style="color: #38bdf8; margin-top: 0; margin-bottom: 6px;">🔑 Universal Data Feed Setup</h3>
+            <h3 style="color: #38bdf8; margin-top: 0; margin-bottom: 6px;">🔑 Universal Data Feed Setup & Token Renewal</h3>
             <p style="color: #94a3b8; font-size: 0.88rem; margin-top: 0;">
-                Provide today's Fyers access token once. The server will stream live synchronized market data to <b>all connected visitors</b>.
+                {expired_msg}
             </p>
         </div>
         """)
@@ -325,61 +430,11 @@ def render_live_option_chain(symbol_name, num_strikes):
                     st.warning("Please paste the auth_code or redirect URL.")
         return
 
-    # Fetch synchronized shared data (served from cache if within 4s, otherwise 1 Fyers API call)
-    try:
-        df, spot, atm, raw_result, err_msg = hub.fetch_shared_option_chain(symbol_name, num_strikes)
-    except Exception as exc:
-        df, spot, atm, raw_result, err_msg = None, 0.0, 0, None, f"Data stream notice: {str(exc)}"
-    
+    # If is_live but df is None (API notice / outside market hours without cache)
     if df is None:
-        render_html(f"""
-        <div class="terminal-header">
-            <div class="brand-title">
-                <span>⚡ MOON CHAIN TERMINAL</span>
-                <span style="color: #64748b; font-weight: normal; font-size: 0.9rem;">|</span>
-                <span style="color: #f8fafc; font-size: 1.05rem;">{symbol_name}</span>
-            </div>
-            <div style="font-size: 0.8rem; color: #ef4444; font-weight: 600;">
-                ● API NOTICE
-            </div>
-        </div>
-        """)
         st.error(f"Fyers API Notice: {err_msg}")
         st.info("If the master session token expired, update it in the Admin sidebar.")
         return
-
-    # Top Navbar Header with Universal Live Stream Badge
-    curr_time_str = datetime.now().strftime("%H:%M:%S")
-    render_html(f"""
-    <div class="terminal-header">
-        <div class="brand-title">
-            <span>⚡ MOON CHAIN TERMINAL</span>
-            <span style="color: #64748b; font-weight: normal; font-size: 0.9rem;">|</span>
-            <span style="color: #f8fafc; font-size: 1.05rem;">{symbol_name}</span>
-            <span class="stream-badge">
-                <span class="pulse-dot"></span>
-                UNIVERSAL LIVE STREAM (ONE DATA FEED)
-            </span>
-        </div>
-        <div style="font-size: 0.78rem; color: #8899ac;">
-            Shared Feed • {curr_time_str}
-        </div>
-    </div>
-    """)
-
-    # Key Analytics Metrics Cards (Spot Price & ATM Strike only)
-    render_html(f"""
-    <div class="metric-container">
-        <div class="metric-card">
-            <div class="metric-label">Spot Price</div>
-            <div class="metric-value" style="color: #38bdf8;">₹{spot:,.2f}</div>
-        </div>
-        <div class="metric-card">
-            <div class="metric-label">ATM Strike</div>
-            <div class="metric-value" style="color: #fbbf24;">{atm:,}</div>
-        </div>
-    </div>
-    """)
 
     # Interactive Strike Selector for Candlestick Chart (Individual for this user session)
     available_strikes = [int(s) for s in df["strike"].tolist()] if not df.empty else [25000]
